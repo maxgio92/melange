@@ -16,11 +16,14 @@ package build
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/charmbracelet/log"
+	"golang.org/x/sys/unix"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -58,7 +61,10 @@ import (
 	"chainguard.dev/melange/pkg/sbom"
 )
 
-const melangeOutputDirName = "melange-out"
+const (
+	melangeOutputDirName = "melange-out"
+	xattrFcap            = "security.capability"
+)
 
 var shellEmptyDir = []string{
 	"sh", "-c",
@@ -385,6 +391,9 @@ func copyFile(base, src, dest string, perm fs.FileMode) error {
 	destPath := filepath.Join(dest, src)
 	destDir := filepath.Dir(destPath)
 
+	sfcaps, _ := getFileCapabilities(basePath)
+	log.Info("source file %s has capabilities %v", basePath, sfcaps)
+
 	inF, err := os.Open(basePath)
 	if err != nil {
 		return err
@@ -409,7 +418,42 @@ func copyFile(base, src, dest string, perm fs.FileMode) error {
 		return err
 	}
 
+	dfcaps, err := getFileCapabilities(destPath)
+	if err != nil {
+		return err
+	}
+	log.Info("dest file %s has capabilities %v", basePath, dfcaps)
+
+	if bytes.Equal(dfcaps, sfcaps) {
+		log.Warnf("file file capabilities for %s do not match", basePath)
+
+		err = setFileCapabilities(destPath, sfcaps)
+		if err != nil {
+			return err
+		}
+	}
+
 	return nil
+}
+
+// getFileCapabilities get security.capability extended attribute from the
+// file specified by filepath. It returns a byte slice of the file capabilities
+// and an error.
+func getFileCapabilities(filepath string) ([]byte, error) {
+	buf := make([]byte, 1024)
+
+	n, err := unix.Getxattr(filepath, xattrFcap, buf)
+	if err != nil {
+		return nil, err
+	}
+
+	return buf[:n], nil
+}
+
+// setFileCapabilities sets security.capability extended attribute specified
+// by caps byte slice. It returns an error.
+func setFileCapabilities(filepath string, caps []byte) error {
+	return unix.Setxattr(filepath, xattrFcap, caps, 0)
 }
 
 // applyBuildOption applies a patch described by a BuildOption to a package build.

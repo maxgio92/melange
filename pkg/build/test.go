@@ -323,6 +323,7 @@ func (t *Test) PopulateWorkspace(ctx context.Context, src fs.FS) error {
 			return err
 		}
 
+		fi.Sys()
 		mode := fi.Mode()
 		if !mode.IsRegular() {
 			return nil
